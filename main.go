@@ -46,124 +46,6 @@ var (
 	failureMessage = [...]byte{0, 0, 0, 1, 5}
 )
 
-// copyDataStruct is used to pass data in the WM_COPYDATA message.
-// We directly pass a pointer to our copyDataStruct type, we need to be
-// careful that it matches the Windows type exactly
-type copyDataStruct struct {
-	dwData uintptr
-	cbData uint32
-	lpData uintptr
-}
-
-type SecurityAttributes struct {
-	Length             uint32
-	SecurityDescriptor uintptr
-	InheritHandle      uint32
-}
-
-var queryPageantMutex sync.Mutex
-
-func makeInheritSaWithSid() *windows.SecurityAttributes {
-	var sa windows.SecurityAttributes
-
-	u, err := user.Current()
-
-	if err == nil {
-		sd, err := windows.SecurityDescriptorFromString("O:" + u.Uid)
-		if err == nil {
-			sa.SecurityDescriptor = sd
-		}
-	}
-
-	sa.Length = uint32(unsafe.Sizeof(sa))
-
-	sa.InheritHandle = 1
-
-	return &sa
-
-}
-
-func queryPageant(buf []byte) (result []byte, err error) {
-	if len(buf) > agentMaxMessageLength {
-		err = errors.New("message too long")
-		return
-	}
-
-	var UTF16PtrFromString = func(s string) *uint16 {
-		result, _ := syscall.UTF16PtrFromString(s)
-		return result
-	}
-
-	hwnd := win.FindWindow(UTF16PtrFromString("Pageant"), UTF16PtrFromString("Pageant"))
-
-	// Launch gpg-connect-agent
-	if hwnd == 0 {
-		log.Println("launching gpg-connect-agent")
-		exec.Command("gpg-connect-agent", "reloadagent", "/bye").Run()
-	}
-
-	hwnd = win.FindWindow(UTF16PtrFromString("Pageant"), UTF16PtrFromString("Pageant"))
-	if hwnd == 0 {
-		err = errors.New("could not find Pageant window")
-		return
-	}
-
-	// Adding process id in order to support parrallel requests.
-	requestName := "WSLPageantRequest" + strconv.Itoa(os.Getpid())
-	mapName := fmt.Sprint(requestName)
-	queryPageantMutex.Lock()
-
-	var sa = makeInheritSaWithSid()
-
-	fileMap, err := windows.CreateFileMapping(invalidHandleValue, sa, pageReadWrite, 0, agentMaxMessageLength, UTF16PtrFromString(mapName))
-	if err != nil {
-		queryPageantMutex.Unlock()
-		return
-	}
-	defer func() {
-		windows.CloseHandle(fileMap)
-		queryPageantMutex.Unlock()
-	}()
-
-	sharedMemory, err := windows.MapViewOfFile(fileMap, fileMapWrite, 0, 0, 0)
-	if err != nil {
-		return
-	}
-	defer windows.UnmapViewOfFile(sharedMemory)
-
-	sharedMemoryArray := (*[agentMaxMessageLength]byte)(unsafe.Pointer(sharedMemory))
-	copy(sharedMemoryArray[:], buf)
-
-	mapNameWithNul := mapName + "\000"
-
-	// We use our knowledge of Go strings to get the length and pointer to the
-	// data and the length directly
-	cds := copyDataStruct{
-		dwData: agentCopyDataID,
-		cbData: uint32(((*reflect.StringHeader)(unsafe.Pointer(&mapNameWithNul))).Len),
-		lpData: ((*reflect.StringHeader)(unsafe.Pointer(&mapNameWithNul))).Data,
-	}
-
-	ret := win.SendMessage(hwnd, win.WM_COPYDATA, 0, uintptr(unsafe.Pointer(&cds)))
-	if ret == 0 {
-		err = errors.New("WM_COPYDATA failed")
-		return
-	}
-
-	len := binary.BigEndian.Uint32(sharedMemoryArray[:4])
-	len += 4
-
-	if len > agentMaxMessageLength {
-		err = errors.New("return message too long")
-		return
-	}
-
-	result = make([]byte, len)
-	copy(result, sharedMemoryArray[:len])
-
-	return
-}
-
 func main() {
 	fixconsole.FixConsoleIfNeeded()
 	flag.Parse()
@@ -294,6 +176,124 @@ func createGPGConn(socketPath string) (net.Conn, error) {
 	}
 
 	return gpgConn, nil
+}
+
+// copyDataStruct is used to pass data in the WM_COPYDATA message.
+// We directly pass a pointer to our copyDataStruct type, we need to be
+// careful that it matches the Windows type exactly
+type copyDataStruct struct {
+	dwData uintptr
+	cbData uint32
+	lpData uintptr
+}
+
+type SecurityAttributes struct {
+	Length             uint32
+	SecurityDescriptor uintptr
+	InheritHandle      uint32
+}
+
+var queryPageantMutex sync.Mutex
+
+func makeInheritSaWithSid() *windows.SecurityAttributes {
+	var sa windows.SecurityAttributes
+
+	u, err := user.Current()
+
+	if err == nil {
+		sd, err := windows.SecurityDescriptorFromString("O:" + u.Uid)
+		if err == nil {
+			sa.SecurityDescriptor = sd
+		}
+	}
+
+	sa.Length = uint32(unsafe.Sizeof(sa))
+
+	sa.InheritHandle = 1
+
+	return &sa
+
+}
+
+func queryPageant(buf []byte) (result []byte, err error) {
+	if len(buf) > agentMaxMessageLength {
+		err = errors.New("message too long")
+		return
+	}
+
+	var UTF16PtrFromString = func(s string) *uint16 {
+		result, _ := syscall.UTF16PtrFromString(s)
+		return result
+	}
+
+	hwnd := win.FindWindow(UTF16PtrFromString("Pageant"), UTF16PtrFromString("Pageant"))
+
+	// Launch gpg-connect-agent
+	if hwnd == 0 {
+		log.Println("launching gpg-connect-agent")
+		exec.Command("gpg-connect-agent", "reloadagent", "/bye").Run()
+	}
+
+	hwnd = win.FindWindow(UTF16PtrFromString("Pageant"), UTF16PtrFromString("Pageant"))
+	if hwnd == 0 {
+		err = errors.New("could not find Pageant window")
+		return
+	}
+
+	// Adding process id in order to support parrallel requests.
+	requestName := "WSLPageantRequest" + strconv.Itoa(os.Getpid())
+	mapName := fmt.Sprint(requestName)
+	queryPageantMutex.Lock()
+
+	var sa = makeInheritSaWithSid()
+
+	fileMap, err := windows.CreateFileMapping(invalidHandleValue, sa, pageReadWrite, 0, agentMaxMessageLength, UTF16PtrFromString(mapName))
+	if err != nil {
+		queryPageantMutex.Unlock()
+		return
+	}
+	defer func() {
+		windows.CloseHandle(fileMap)
+		queryPageantMutex.Unlock()
+	}()
+
+	sharedMemory, err := windows.MapViewOfFile(fileMap, fileMapWrite, 0, 0, 0)
+	if err != nil {
+		return
+	}
+	defer windows.UnmapViewOfFile(sharedMemory)
+
+	sharedMemoryArray := (*[agentMaxMessageLength]byte)(unsafe.Pointer(sharedMemory))
+	copy(sharedMemoryArray[:], buf)
+
+	mapNameWithNul := mapName + "\000"
+
+	// We use our knowledge of Go strings to get the length and pointer to the
+	// data and the length directly
+	cds := copyDataStruct{
+		dwData: agentCopyDataID,
+		cbData: uint32(((*reflect.StringHeader)(unsafe.Pointer(&mapNameWithNul))).Len),
+		lpData: ((*reflect.StringHeader)(unsafe.Pointer(&mapNameWithNul))).Data,
+	}
+
+	ret := win.SendMessage(hwnd, win.WM_COPYDATA, 0, uintptr(unsafe.Pointer(&cds)))
+	if ret == 0 {
+		err = errors.New("WM_COPYDATA failed")
+		return
+	}
+
+	len := binary.BigEndian.Uint32(sharedMemoryArray[:4])
+	len += 4
+
+	if len > agentMaxMessageLength {
+		err = errors.New("return message too long")
+		return
+	}
+
+	result = make([]byte, len)
+	copy(result, sharedMemoryArray[:len])
+
+	return
 }
 
 func handleSSH(reader *bufio.Reader, writer *bufio.Writer, closer func()) {
