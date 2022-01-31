@@ -20,7 +20,6 @@ import (
 	"unsafe"
 
 	"github.com/Microsoft/go-winio"
-	"github.com/apenwarr/fixconsole"
 	"github.com/lxn/win"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/windows"
@@ -47,7 +46,6 @@ var (
 )
 
 func main() {
-	fixconsole.FixConsoleIfNeeded()
 	flag.Parse()
 	log.SetOutput(os.Stderr)
 
