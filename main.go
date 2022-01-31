@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/Microsoft/go-winio"
@@ -41,13 +42,21 @@ var (
 	sourceGpgConfigBasepath = flag.String("sourceGpgConfigBasepath", "", "gpg config path on windows")
 	ssh                     = flag.Bool("ssh", false, "ssh mode")
 	winssh                  = flag.String("winssh", "", "windows ssh mode")
+	logfilePath             = flag.String("log", "wsl2-gpg-agent.log", "logfile")
 
 	failureMessage = [...]byte{0, 0, 0, 1, 5}
 )
 
 func main() {
 	flag.Parse()
-	log.SetOutput(os.Stderr)
+
+	logfile, err := os.Create(filepath.Clean(*logfilePath))
+	if err != nil {
+		panic("cannnot open wsl2-gpg-agent.log:" + err.Error())
+	}
+	defer logfile.Close()
+
+	log.SetOutput(logfile)
 
 	done := make(chan bool, 1)
 
@@ -230,12 +239,14 @@ func queryPageant(buf []byte) (result []byte, err error) {
 	if hwnd == 0 {
 		log.Println("launching gpg-connect-agent")
 		exec.Command("gpg-connect-agent", "reloadagent", "/bye").Run()
-	}
 
-	hwnd = win.FindWindow(UTF16PtrFromString("Pageant"), UTF16PtrFromString("Pageant"))
-	if hwnd == 0 {
-		err = errors.New("could not find Pageant window")
-		return
+		time.Sleep(time.Second * 3)
+
+		hwnd = win.FindWindow(UTF16PtrFromString("Pageant"), UTF16PtrFromString("Pageant"))
+		if hwnd == 0 {
+			err = errors.New("could not find Pageant window")
+			return
+		}
 	}
 
 	// Adding process id in order to support parrallel requests.
