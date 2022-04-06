@@ -52,7 +52,7 @@ func main() {
 
 	logfile, err := os.Create(filepath.Clean(*logfilePath))
 	if err != nil {
-		panic("cannnot open wsl2-gpg-agent.log:" + err.Error())
+		panic(fmt.Sprintf("cannnot open %s: %s", *logfilePath, err.Error()))
 	}
 	defer logfile.Close()
 
@@ -80,7 +80,7 @@ func main() {
 				log.Printf("failed to find user home dir: %s", err)
 				return
 			}
-			sourceBasePath = filepath.Join(winHomeDir, "AppData", "Roaming", "gnupg")
+			sourceBasePath = filepath.Join(winHomeDir, "AppData", "Local", "gnupg")
 		}
 
 		gpgconn, err := createGPGConn(filepath.Join(sourceBasePath, *gpg))
